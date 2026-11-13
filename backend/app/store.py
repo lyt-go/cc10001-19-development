@@ -4,16 +4,29 @@
 """
 from __future__ import annotations
 
+import copy
+import threading
 from typing import Any
 
 from app.seed import SEED_ROWS
 
 
+def _fresh_tables() -> dict[str, list[dict[str, Any]]]:
+    return {
+        name: [copy.deepcopy(row) for row in rows] for name, rows in SEED_ROWS.items()
+    }
+
+
 class Store:
     def __init__(self) -> None:
-        self._tables: dict[str, list[dict[str, Any]]] = {
-            name: [dict(row) for row in rows] for name, rows in SEED_ROWS.items()
-        }
+        self._tables = _fresh_tables()
+        # 状态流转与审核版本号在同一把锁里改，避免并发提交产生两个有效结论。
+        self.lock = threading.RLock()
+
+    def reset(self) -> None:
+        """把示例数据恢复成初始状态（测试与演示重置用）。"""
+        with self.lock:
+            self._tables = _fresh_tables()
 
     def module_names(self) -> list[str]:
         return sorted(self._tables)

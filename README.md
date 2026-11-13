@@ -68,6 +68,29 @@ npm run dev
 | 模板库 | `templatelib` | 采集模板 | 模板编号、站点分类、模板名称 |
 | 数据标注 | `datalabel` | 标注任务 | 标注编号、数据集名称、标注类型 |
 
+## 标注抽检质量闭环
+
+`backend/app/services/quality.py` 是唯一的质量判定实现，抽检、失败样本复核与交付检查都调用
+它，三个入口不会给出不同结论。
+
+- **抽检**：`POST /api/datalabel/{id}/inspections`，按 `字段列表` + `记录数阈值` 抽样本，
+  返回通过、失败、需复核数量和逐样本的 `{sample_id, field, reason}` 失败明细；
+  校验规则可引用 `resultcheck`（如 `RESULT-41`），也可在请求里内联 `校验规则`。
+- **复核**：`POST /api/datalabel/{id}/inspections/{round}/recheck`，只用修正后的样本重新判定，
+  可传 `sample_values` 精确到失败样本，也可传 `sample_ids` + `values`；本轮抽检结果不丢。
+- **审核**：`POST /api/datalabel/{id}/audits`，生成递增的 `审核版本`；同一轮并发提交只有一条有效结论，
+  旧结论 `有效=false` 保留为历史。带 `请求号` 的重复提交按幂等处理，带 `expected_version` 的过期提交被拒。
+- **门禁**：`GET /api/datalabel/gate?code=LABEL-22`。预处理管道（`提交校验`/`启用管道`）与输出配置
+  （`提交配置测试`/`启用配置`）共用 `quality.gate`：只有最新审核版本为「通过」且关键字段重复检查通过才放行，
+  未通过时 `阻止原因` 会直接出现在输出配置清单的每一行。
+- **完成条目数**：按抽检轮次只结算一次，且仅在门禁真正通过时结算；审核退回标注后修正再审核不会重复累加。
+
+示例数据中 `LABEL-22`（商品目录，字段：标题/价格/品牌/库存，总 1000、完成 800、审核人质检员）自带
+一批样本，配合 `RESULT-41`（价格数值范围 0~99999、标题与品牌重复检查、阈值 5）可以完整走一遍闭环。
+
+回归测试：`cd backend && .venv/bin/python -m unittest discover -s tests -v`
+
+
 ## 约定
 
 - 每个模块的前端页面在 `frontend/src/views/<模块>/index.vue`，后端接口在

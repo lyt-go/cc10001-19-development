@@ -1,4 +1,4 @@
-"""数据标注接口：维护标注任务，覆盖开始标注、提交审核、废弃任务等动作。"""
+"""数据标注接口：维护标注任务，覆盖抽检、复核、审核与交付门禁查询。"""
 from __future__ import annotations
 
 from typing import Any
@@ -12,7 +12,10 @@ router = APIRouter(prefix="/api/datalabel", tags=["数据标注"])
 
 service = DatalabelService()
 
-LIST_FIELDS = ["标注编号", "数据集名称", "标注类型", "字段列表", "标注人", "审核人", "总条目数", "完成条目数"]
+LIST_FIELDS = [
+    "标注编号", "数据集名称", "标注类型", "字段列表", "标注人", "审核人",
+    "总条目数", "完成条目数", "质量结论", "交付状态",
+]
 STATUSES = ["草稿", "标注中", "审核中", "已完成", "已废弃"]
 
 
@@ -26,8 +29,29 @@ def list_entries(
     """按标注编号与状态过滤数据标注列表；没有数据时返回空页，不报错。"""
     if size > 200:
         raise HTTPException(status_code=400, detail="每页最多 200 条，请缩小分页范围")
+    if status and status not in STATUSES:
+        raise HTTPException(status_code=400, detail=f"状态「{status}」不在可筛选范围")
     items, total = service.list_entries(keyword=keyword, status=status, page=page, size=size)
     return PageResult(items=items, total=total, page=page, size=size)
+
+
+@router.get("/stats", response_model=dict)
+def stats() -> dict[str, Any]:
+    """标注任务与质量门禁汇总。"""
+    return service.stats()
+
+
+@router.get("/export")
+def export_entries() -> dict[str, Any]:
+    """导出数据标注清单：返回当前过滤条件下的全量数据。"""
+    items, total = service.list_entries(page=1, size=10000)
+    return {"module": "datalabel", "total": total, "items": items}
+
+
+@router.get("/gate", response_model=dict)
+def gate_by_code(code: str | None = Query(default=None, description="标注编号或数据集名称")):
+    """按标注编号查询交付门禁；输出配置清单用它同步展示阻止原因。"""
+    return service.gate_for_code(code)
 
 
 @router.get("/{entry_id}", response_model=dict)
@@ -39,6 +63,21 @@ def get_entry(entry_id: int) -> dict:
     return entry
 
 
+@router.get("/{entry_id}/inspections", response_model=dict)
+def list_inspections(entry_id: int) -> dict[str, Any]:
+    """读取全部抽检轮次（含复核历史与审核历史）。"""
+    entry = service.get_entry(entry_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"标注任务 {entry_id} 不存在或已归档")
+    return {
+        "entry_id": entry_id,
+        "current_round": entry.get("当前抽检轮次"),
+        "rounds": entry.get("抽检记录") or [],
+        "audits": entry.get("审核历史") or [],
+        "gate": entry.get("质量门禁") or service._gate(entry),
+    }
+
+
 @router.post("", response_model=ActionResult)
 def create_entry(payload: EntryPayload) -> ActionResult:
     """登记一条标注任务，缺字段时说明原因而不是静默丢弃。"""
@@ -46,6 +85,35 @@ def create_entry(payload: EntryPayload) -> ActionResult:
     if missing:
         return ActionResult(ok=False, message=f"缺少必填字段：{'、'.join(missing)}")
     return ActionResult(ok=True, message="标注任务已登记", entry=entry)
+
+
+@router.post("/{entry_id}/inspections", response_model=ActionResult)
+def inspect(entry_id: int, payload: EntryPayload) -> ActionResult:
+    """按字段列表与记录数阈值抽取样本，返回通过、失败、需复核数量。"""
+    record, message = service.inspect(entry_id, payload.values)
+    if record is None:
+        return ActionResult(ok=False, message=message)
+    entry = service.get_entry(entry_id)
+    return ActionResult(ok=True, message=message, entry={**record, "任务": entry})
+
+
+@router.post("/{entry_id}/inspections/{round_no}/recheck", response_model=ActionResult)
+def recheck(entry_id: int, round_no: int, payload: EntryPayload) -> ActionResult:
+    """从失败样本继续复核，只合并修正后的样本并重新判定。"""
+    record, message = service.recheck(entry_id, round_no, payload.values)
+    if record is None:
+        return ActionResult(ok=False, message=message)
+    return ActionResult(ok=True, message=message, entry=record)
+
+
+@router.post("/{entry_id}/audits", response_model=ActionResult)
+def audit(entry_id: int, payload: EntryPayload) -> ActionResult:
+    """确认审核结论；同一轮并发提交只接受一个有效版本。"""
+    conclusion, message = service.audit(entry_id, payload.values)
+    if conclusion is None:
+        return ActionResult(ok=False, message=message)
+    entry = service.get_entry(entry_id)
+    return ActionResult(ok=True, message=message, entry={**conclusion, "任务": entry})
 
 
 @router.post("/{entry_id}/actions", response_model=ActionResult)
@@ -56,10 +124,3 @@ def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
     if entry is None:
         return ActionResult(ok=False, message=message)
     return ActionResult(ok=True, message=message, entry=entry)
-
-
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出数据标注清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "datalabel", "total": total, "items": items}

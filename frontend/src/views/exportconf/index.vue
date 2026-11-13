@@ -31,12 +31,19 @@
       <thead>
         <tr>
           <th v-for="column in columns" :key="column">{{ column }}</th>
+          <th>质量门禁</th>
           <th>可执行动作</th>
         </tr>
       </thead>
       <tbody>
         <tr v-for="row in rows" :key="String(row.id)">
           <td v-for="column in columns" :key="column">{{ row[column] ?? '—' }}</td>
+          <td>
+            <span :class="['tag', row.质量门禁 === '通过' ? 'tag-ok' : 'tag-block']">
+              {{ row.质量门禁 ?? '阻止' }}
+            </span>
+            <span v-if="reasonText(row)" class="block-reason">{{ reasonText(row) }}</span>
+          </td>
           <td class="row-actions">
             <button
               v-for="action in actions"
@@ -50,7 +57,7 @@
           </td>
         </tr>
         <tr v-if="!rows.length">
-          <td :colspan="columns.length + 1" class="empty-state">暂无输出配置数据，可先登记输出配置</td>
+          <td :colspan="columns.length + 2" class="empty-state">暂无输出配置数据，可先登记输出配置</td>
         </tr>
       </tbody>
     </table>
@@ -70,7 +77,7 @@ import { request } from '@/api/client'
 type Row = Record<string, string | number | null>
 
 const ENDPOINT = '/api/exportconf'
-const columns = ["配置编号", "输出格式", "目标路径", "分片阈值", "压缩算法", "列分隔符", "字符编码", "数据源"]
+const columns = ["配置编号", "输出格式", "目标路径", "数据源", "关联审核版本", "分片阈值", "压缩算法", "列分隔符", "字符编码"]
 const actions = ["提交配置测试", "启用配置", "停用配置"]
 const statuses = ["草稿", "配置测试中", "已启用", "已停用"]
 const stats = [{"label": "输出配置总数", "value": 0}, {"label": "已启用配置", "value": 0}, {"label": "配置测试中", "value": 0}]
@@ -80,6 +87,12 @@ const total = ref(0)
 const errorMessage = ref('')
 const filters = ref<Record<string, string>>({})
 const filterFields = columns.slice(0, 3)
+
+function reasonText(row: Row): string {
+  const reasons = row['阻止原因']
+  if (Array.isArray(reasons)) return reasons.join('；')
+  return typeof reasons === 'string' ? reasons : ''
+}
 
 function resetFilters() {
   filters.value = {}
@@ -128,3 +141,10 @@ async function reload() {
 
 onMounted(reload)
 </script>
+
+<style scoped>
+.tag { display: inline-block; border-radius: 4px; padding: 1px 6px; font-size: 12px; }
+.tag-ok { background: #e7f6ec; color: #087443; }
+.tag-block { background: #fef3f2; color: #b42318; }
+.block-reason { display: block; color: #b42318; font-size: 12px; margin-top: 2px; }
+</style>
